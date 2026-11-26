@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -40,8 +41,8 @@ AUTH_USER = os.environ.get("REMOTEAGY_USER", "agy")
 AUTH_PASS = os.environ.get("REMOTEAGY_PASS", "changeme")
 DEFAULT_CWD = os.environ.get("DEFAULT_CWD", str(BASE_DIR))
 PROJECTS_ROOT = Path(os.environ.get("PROJECTS_ROOT", "/wzw"))
-AGY_BIN = os.environ.get("AGY_BIN", "/root/.local/bin/agy")
-AGY_DATA_DIR = Path(os.environ.get("AGY_DATA_DIR", "/root/.gemini/antigravity-cli"))
+AGY_BIN = os.environ.get("AGY_BIN") or shutil.which("agy") or str(Path.home() / ".local" / "bin" / "agy")
+AGY_DATA_DIR = Path(os.environ.get("AGY_DATA_DIR") or str(Path.home() / ".gemini" / "antigravity-cli"))
 SUMMARIES_DB = AGY_DATA_DIR / "conversation_summaries.db"
 BRAIN_DIR = AGY_DATA_DIR / "brain"
 SESSIONS_FILE = BASE_DIR / ".sessions.json"
@@ -83,6 +84,8 @@ async def fetch_quota_data(refresh: bool = False) -> dict:
     now = time.time()
     if not refresh and quota_cache["data"] is not None and (now - float(quota_cache["ts"])) < 60:
         return quota_cache["data"]  # type: ignore[return-value]
+    if not Path(AGY_BIN).exists():
+        return {"ok": False, "error": f"未找到 agy 可执行文件: {AGY_BIN}，请在 .env 中配置 AGY_BIN"}
     try:
         proc = await asyncio.create_subprocess_exec(
             AGY_BIN,
@@ -91,11 +94,28 @@ async def fetch_quota_data(refresh: bool = False) -> dict:
             "-p=/usage",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PATH": f"/root/.local/bin:{os.environ.get('PATH', '')}"},
+            env={**os.environ, "PATH": f"{Path.home() / '.local' / 'bin'}:{os.environ.get('PATH', '')}"},
         )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=15)
         raw = out.decode("utf-8", errors="replace").strip()
-        parsed = json.loads(raw)
+        err_text = err.decode("utf-8", errors="replace").strip()
+        if not raw:
+            msg = err_text or f"agy 返回为空 (exit={proc.returncode})，请确认已在服务器终端完成 agy 登录授权"
+            return {"ok": False, "error": msg[:300]}
+        parsed = None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            for line in reversed(raw.splitlines()):
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        parsed = json.loads(line)
+                        break
+                    except json.JSONDecodeError:
+                        pass
+        if not isinstance(parsed, dict):
+            return {"ok": False, "error": (err_text or raw)[:300]}
         data = parsed.get("command", {}).get("data") or {}
         result = {"ok": True, "data": data, "fetched_at": int(now)}
         quota_cache["ts"] = now

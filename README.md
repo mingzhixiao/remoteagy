@@ -11,7 +11,10 @@
   * 支持展开查看 `Worked for Xs` 思考过程与工具调用轨迹。
   * 支持查看本轮修改文件统计与红绿高亮 **Files Review** Diff 弹窗。
 * **模型与额度管理**：支持两级模型选择器（`Model` + `Thinking effort`）、实时查询账户配额（`/usage`）、以及网页端 **Create Project** 一键建目录。
-* **微信 ClawBot 原生接入**：内置腾讯官方 iLink Bot 协议客户端，网页端扫码即可绑定个人微信，在微信里直接对话、切项目、切模型、查额度，且与网页端共享同一套本地会话历史。
+* **微信 ClawBot & QQ 官方机器人接入**：
+  * **微信**：内置腾讯官方 iLink Bot 协议客户端，网页端扫码即可绑定个人微信。
+  * **QQ**：内置腾讯官方 QQ 机器人 OpenAPI v2 + WebSocket 网关客户端（支持私聊 `C2C` 与群 `@机器人`），无需公网回调域名。
+  * 两者均支持在聊天中切换项目、切换模型、查看额度，且与网页端共享同一套本地会话历史。
 
 ---
 
@@ -22,7 +25,8 @@
 * **Antigravity CLI (`agy`)**：核心 Agent 执行引擎，需预先安装并完成账号登录授权（默认路径 `/root/.local/bin/agy`）
 * **Python `3.10+`** 及 `requirements.txt` 中的库：
   * `fastapi` + `uvicorn`：Web 服务、SSE 流式响应与静态页面托管
-  * `httpx`：异步 HTTP 客户端，用于与腾讯微信 iLink 接口通信
+  * `httpx`：异步 HTTP 客户端，用于与腾讯微信 iLink / QQ OpenAPI 通信
+  * `websockets`：用于连接 QQ 官方机器人 WebSocket 网关
   * `pydantic`：请求参数校验
   * `qrcode` + `Pillow`：将微信登录链接渲染为前端可直接扫码的 PNG 二维码
 * **SQLite 3**（Python 标准库自带）：只读读取本机 `conversation_summaries.db` 历史会话索引
@@ -91,6 +95,14 @@ python3 -m uvicorn server:app --host 127.0.0.1 --port 7682
    * `/quota` 或 `/额度` — 查看各模型分组剩余额度与重置时间
    * `/status` — 查看当前工作目录、会话与模型
    * `/new` — 开启全新对话
+
+---
+
+## QQ 官方机器人接入指南
+
+1. 前往 [QQ 开放平台](https://q.qq.com/) 创建机器人应用，获取 `AppID` 与 `AppSecret`（需开启私聊/群 `@` 权限）。
+2. 在 `RemoteAgy` 网页右上角点击 **`🐧 QQ`**，填入 `AppID` 与 `AppSecret`（可选填白名单 OpenID，留空则自动绑定首位私聊你的用户），点击 **保存并连接**。
+3. 后端会自动通过 WebSocket 网关长连接接入 QQ，无需配置公网回调地址，支持的斜杠指令与微信端完全一致（`/help`、`/projects`、`/project`、`/newproject`、`/models`、`/model`、`/quota`、`/status`、`/new`）。
 
 ---
 

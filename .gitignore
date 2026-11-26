@@ -1,6 +1,8 @@
 .env
 .wechat_state.json
 .wechat_state.tmp
+.qq_state.json
+.qq_state.tmp
 .sessions.json
 .projects.json
 .remoteagy_uploads/

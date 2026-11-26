@@ -19,6 +19,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
 from wechat_ilink import WeChatILinkManager
+from qq_bot import QQBotManager
 
 
 def load_env(env_path: Path) -> None:
@@ -46,11 +47,13 @@ BRAIN_DIR = AGY_DATA_DIR / "brain"
 SESSIONS_FILE = BASE_DIR / ".sessions.json"
 CUSTOM_PROJECTS_FILE = BASE_DIR / ".projects.json"
 WECHAT_STATE_FILE = BASE_DIR / ".wechat_state.json"
+QQ_STATE_FILE = BASE_DIR / ".qq_state.json"
 
 active_procs: Dict[str, asyncio.subprocess.Process] = {}
 models_cache: List[Dict[str, str]] = []
 quota_cache: Dict[str, object] = {"ts": 0.0, "data": None}
 wechat_mgr: Optional[WeChatILinkManager] = None
+qq_mgr: Optional[QQBotManager] = None
 
 
 async def get_models_list() -> List[dict]:
@@ -104,7 +107,7 @@ async def fetch_quota_data(refresh: bool = False) -> dict:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global wechat_mgr
+    global wechat_mgr, qq_mgr
     wechat_mgr = WeChatILinkManager(
         state_file=WECHAT_STATE_FILE,
         agy_bin=AGY_BIN,
@@ -114,11 +117,22 @@ async def lifespan(_: FastAPI):
         get_models_fn=get_models_list,
         get_quota_fn=fetch_quota_data,
     )
+    qq_mgr = QQBotManager(
+        state_file=QQ_STATE_FILE,
+        agy_bin=AGY_BIN,
+        default_cwd=DEFAULT_CWD,
+        projects_root=PROJECTS_ROOT,
+        list_projects_fn=list_all_projects,
+        get_models_fn=get_models_list,
+        get_quota_fn=fetch_quota_data,
+    )
     await wechat_mgr.start_if_configured()
+    await qq_mgr.start_if_configured()
     try:
         yield
     finally:
         await wechat_mgr.stop_all()
+        await qq_mgr.stop_all()
 
 
 app = FastAPI(title="RemoteAgy Web", lifespan=lifespan)
@@ -630,3 +644,30 @@ async def wechat_disconnect(_: str = Depends(verify_auth)):
     assert wechat_mgr is not None
     await wechat_mgr.disconnect()
     return wechat_mgr.status_dict()
+
+
+class QQConnectRequest(BaseModel):
+    app_id: str
+    app_secret: str
+    sandbox: bool = False
+    allowed_openids: Optional[List[str]] = None
+
+
+@app.get("/api/qq/status")
+async def qq_status(_: str = Depends(verify_auth)):
+    assert qq_mgr is not None
+    return qq_mgr.status_dict()
+
+
+@app.post("/api/qq/connect")
+async def qq_connect(req: QQConnectRequest, _: str = Depends(verify_auth)):
+    assert qq_mgr is not None
+    return await qq_mgr.configure_and_connect(
+        req.app_id, req.app_secret, req.sandbox, req.allowed_openids
+    )
+
+
+@app.post("/api/qq/disconnect")
+async def qq_disconnect(_: str = Depends(verify_auth)):
+    assert qq_mgr is not None
+    return await qq_mgr.disconnect()

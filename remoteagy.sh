@@ -43,14 +43,16 @@ cmd_start() {
     return
   fi
   setsid "$PY_BIN" -m uvicorn server:app --host 127.0.0.1 --port "$PORT" </dev/null >"$LOG_FILE" 2>&1 &
-  sleep 2
-  pid="$(get_port_pid)"
-  if [ -n "$pid" ]; then
-    echo "[OK] RemoteAgy 启动成功 (PID=$pid, 监听=127.0.0.1:$PORT)"
-  else
-    echo "[错误] RemoteAgy 启动失败，请查看日志: $LOG_FILE"
-    exit 1
-  fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 1
+    pid="$(get_port_pid)"
+    if [ -n "$pid" ]; then
+      echo "[OK] RemoteAgy 启动成功 (PID=$pid, 监听=127.0.0.1:$PORT)"
+      return
+    fi
+  done
+  echo "[错误] RemoteAgy 启动失败，请查看日志: $LOG_FILE"
+  exit 1
 }
 
 cmd_stop() {

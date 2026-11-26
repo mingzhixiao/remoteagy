@@ -57,6 +57,23 @@ chmod +x deploy.sh
 
 ---
 
+## 常用运维命令
+
+项目自带管理脚本 `remoteagy.sh`（自动兼容 `systemd` 服务模式和直接后台进程模式）：
+
+```bash
+chmod +x remoteagy.sh
+
+./remoteagy.sh start    # 启动服务
+./remoteagy.sh stop     # 停止服务
+./remoteagy.sh restart  # 重启服务
+./remoteagy.sh status   # 查看运行状态
+./remoteagy.sh logs     # 实时查看日志
+./remoteagy.sh update   # 拉取最新代码、更新依赖并重启
+```
+
+---
+
 ## 手动运行
 
 ```bash

@@ -15,18 +15,32 @@
 
 ---
 
-## 环境要求
+## 环境要求与依赖组件
 
-* Linux 服务器（推荐 Debian / Ubuntu）
-* Python `3.10+`
-* 已安装并完成登录授权的 **Antigravity CLI (`agy`)**（默认路径 `/root/.local/bin/agy`）
+### 1. 必需组件
+* **Linux 服务器**：推荐 Debian / Ubuntu
+* **Antigravity CLI (`agy`)**：核心 Agent 执行引擎，需预先安装并完成账号登录授权（默认路径 `/root/.local/bin/agy`）
+* **Python `3.10+`** 及 `requirements.txt` 中的库：
+  * `fastapi` + `uvicorn`：Web 服务、SSE 流式响应与静态页面托管
+  * `httpx`：异步 HTTP 客户端，用于与腾讯微信 iLink 接口通信
+  * `pydantic`：请求参数校验
+  * `qrcode` + `Pillow`：将微信登录链接渲染为前端可直接扫码的 PNG 二维码
+* **SQLite 3**（Python 标准库自带）：只读读取本机 `conversation_summaries.db` 历史会话索引
+
+### 2. 可选组件
+* **Git**：当项目目录本身是 Git 仓库时，用于 **Files Review** 补充 `git diff` 差异展示
+* **systemd**：`deploy.sh` 用于注册守护进程与开机自启（无 systemd 环境会自动回退到后台进程启动）
+* **反向代理（Nginx / OpenResty / Caddy 等）**：用于公网 HTTPS 访问与自定义路径挂载
+
+### 3. 不需要依赖的组件（重要）
+* **不依赖 `ttyd`、`tmux`、`trzsz`、`lrzsz`**：本项目不是网页黑框终端套壳，而是直接通过 `agy --output-format stream-json` 与本地 CLI 交互，前端独立实现聊天、传图、思考过程与代码 Review。只有在你额外需要一个浏览器纯终端作为兜底时，才需自行安装 `ttyd + tmux + trzsz`。
 
 ---
 
 ## 一键部署
 
 ```bash
-git clone <你的仓库地址> remoteagy
+git clone https://github.com/mingzhixiao/remoteagy.git
 cd remoteagy
 chmod +x deploy.sh
 ./deploy.sh

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from wechat_ilink import WeChatILinkManager
 from qq_bot import QQBotManager
+from token_stats import get_token_stats, record_token_usage, reset_token_stats
 
 
 def load_env(env_path: Path) -> None:
@@ -285,6 +286,13 @@ def load_conversation_messages(conv_id: str) -> List[dict]:
     messages: List[dict] = []
     pending_steps: List[dict] = []
     pending_tools: List[dict] = []
+    pending_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "thinking_tokens": 0,
+        "total_tokens": 0,
+    }
 
     def get_full_entry(step_idx: int) -> Optional[dict]:
         if not full_by_step and full_path.exists():
@@ -315,12 +323,23 @@ def load_conversation_messages(conv_id: str) -> List[dict]:
         if msg_type == "USER_INPUT":
             pending_steps = []
             pending_tools = []
+            pending_usage = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "thinking_tokens": 0,
+                "total_tokens": 0,
+            }
             raw = d.get("content", "")
             m = re.search(r"<USER_REQUEST>\s*([\s\S]*?)\s*</USER_REQUEST>", raw)
             text = m.group(1).strip() if m else raw.strip()
             if text:
                 messages.append({"role": "user", "text": text})
         elif msg_type == "PLANNER_RESPONSE":
+            pending_usage["input_tokens"] += int(d.get("input_tokens") or 0)
+            pending_usage["output_tokens"] += int(d.get("output_tokens") or 0)
+            pending_usage["cache_read_tokens"] += int(d.get("cache_read_tokens") or 0)
+            pending_usage["thinking_tokens"] += int(d.get("thinking_tokens") or 0)
             thinking = (d.get("thinking") or "").strip()
             if thinking:
                 pending_steps.append({"kind": "thinking", "text": thinking})
@@ -336,17 +355,28 @@ def load_conversation_messages(conv_id: str) -> List[dict]:
                 )
             content = (d.get("content") or "").strip()
             if content:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "text": content,
-                        "model": d.get("model", ""),
-                        "steps": pending_steps,
-                        "changed_files": extract_changed_files_from_tools(pending_tools),
-                    }
+                pending_usage["total_tokens"] = (
+                    pending_usage["input_tokens"] + pending_usage["output_tokens"]
                 )
+                msg_item = {
+                    "role": "assistant",
+                    "text": content,
+                    "model": d.get("model", ""),
+                    "steps": pending_steps,
+                    "changed_files": extract_changed_files_from_tools(pending_tools),
+                }
+                if pending_usage["total_tokens"] > 0 or pending_usage["cache_read_tokens"] > 0:
+                    msg_item["usage"] = dict(pending_usage)
+                messages.append(msg_item)
                 pending_steps = []
                 pending_tools = []
+                pending_usage = {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "thinking_tokens": 0,
+                    "total_tokens": 0,
+                }
 
     return messages
 
@@ -515,6 +545,16 @@ async def get_quota(refresh: bool = False, _: str = Depends(verify_auth)):
     return await fetch_quota_data(refresh=refresh)
 
 
+@app.get("/api/tokens")
+async def get_tokens(_: str = Depends(verify_auth)):
+    return get_token_stats()
+
+
+@app.post("/api/tokens/reset")
+async def reset_tokens(_: str = Depends(verify_auth)):
+    return reset_token_stats()
+
+
 @app.post("/api/stop")
 async def stop_run(req: StopRequest, _: str = Depends(verify_auth)):
     proc = active_procs.get(req.request_id)
@@ -590,6 +630,8 @@ async def chat_stream(req: ChatRequest, request: Request, _: str = Depends(verif
         active_procs[req_id] = proc
         conv_id = req.conversation_id
         title = (req.prompt.strip() or "图片对话")[:60]
+        last_usage = None
+        recorded_usage = False
 
         yield f"data: {json.dumps({'type': 'meta', 'request_id': req_id, 'images': saved_images})}\n\n"
 
@@ -617,12 +659,39 @@ async def chat_stream(req: ChatRequest, request: Request, _: str = Depends(verif
                     conv_id = ev.get("conversation_id") or conv_id
                     if conv_id:
                         upsert_session(conv_id, title, str(cwd), req.model or "")
+                elif ev_name == "step_update":
+                    su = ev.get("step_update") or {}
+                    if isinstance(su.get("usage"), dict):
+                        last_usage = su["usage"]
                 elif ev_name == "result":
-                    r_conv = ev.get("result", {}).get("conversation_id") or conv_id
+                    r = ev.get("result") or {}
+                    r_conv = r.get("conversation_id") or conv_id
                     if r_conv:
+                        conv_id = r_conv
                         upsert_session(r_conv, title, str(cwd), req.model or "")
+                    usage = r.get("usage") or last_usage
+                    if usage and not recorded_usage:
+                        record_token_usage(
+                            usage=usage,
+                            source="web",
+                            conversation_id=conv_id or "",
+                            model=req.model or "",
+                            cwd=str(cwd),
+                            duration_seconds=float(r.get("duration_seconds") or 0.0),
+                        )
+                        recorded_usage = True
 
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+            if last_usage and not recorded_usage:
+                record_token_usage(
+                    usage=last_usage,
+                    source="web",
+                    conversation_id=conv_id or "",
+                    model=req.model or "",
+                    cwd=str(cwd),
+                )
+                recorded_usage = True
 
             stderr_bytes = b""
             if proc.stderr is not None:

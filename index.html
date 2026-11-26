@@ -412,6 +412,37 @@
     .q-fill { height: 100%; border-radius: 999px; transition: width .25s ease; }
     .q-sub { font-size: 11px; color: var(--muted); }
 
+    /* Token stats & per-call badge */
+    .token-badge {
+      display: none; align-items: center; gap: 6px; flex-wrap: wrap;
+      font-size: 11.5px; color: var(--muted); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px;
+    }
+    .token-badge.show { display: inline-flex; }
+    .token-badge strong { color: var(--text); font-weight: 600; }
+    .token-modal-card { max-width: 560px; }
+    .token-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    @media (max-width: 540px) { .token-grid { grid-template-columns: 1fr; } }
+    .token-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .token-card-label { font-size: 11.5px; color: var(--muted); }
+    .token-card-val { font-size: 18px; font-weight: 700; color: var(--text); }
+    .token-card-sub { font-size: 11px; color: var(--muted); line-height: 1.4; }
+    .token-sec-title { font-size: 12.5px; font-weight: 600; color: var(--text); margin-top: 2px; }
+    .token-day-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .token-day-row:last-child { border-bottom: none; }
+    .token-day-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--text); }
+    .token-day-sub { font-size: 11px; color: var(--muted); }
+    .token-call-row {
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      padding: 6px 8px; background: #18181c; border-radius: 7px; font-size: 11.5px;
+    }
+    .token-call-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .token-call-meta { color: var(--muted); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .token-call-right { text-align: right; flex-shrink: 0; }
+
     /* Mobile responsive */
     @media (max-width: 767px) {
       aside.sidebar {
@@ -453,6 +484,7 @@
         <div style="display:flex;align-items:center;gap:8px;">
           <button class="quota-pill" id="qqBtn" title="QQ Bot 接入">🐧 <span id="qqSummary">QQ</span></button>
           <button class="quota-pill" id="wechatBtn" title="微信 ClawBot 接入">💬 <span id="wechatSummary">微信</span></button>
+          <button class="quota-pill" id="tokenBtn" title="查看 Token 消耗统计">🪙 <span id="tokenSummary">Tokens</span></button>
           <button class="quota-pill" id="quotaBtn" title="查看模型额度">⚡ <span id="quotaSummary">额度</span></button>
         </div>
       </header>
@@ -524,6 +556,20 @@
         </div>
       </div>
       <div id="quotaBody" style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--muted);">加载中...</div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="tokenModal">
+    <div class="modal-card token-modal-card">
+      <div class="modal-hdr">
+        <h3>Token 消耗统计</h3>
+        <div style="display:flex;gap:8px;">
+          <button class="act-btn" id="tokenRefreshBtn">↻ 刷新</button>
+          <button class="act-btn" id="tokenResetBtn" title="从当前时间重新开始累计">↺ 重置起点</button>
+          <button class="act-btn" id="tokenCloseBtn">✕</button>
+        </div>
+      </div>
+      <div id="tokenBody" style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--muted);">加载中...</div>
     </div>
   </div>
 
@@ -953,6 +999,7 @@
             ui.body.innerHTML = renderMarkdown(m.text);
             ui.rawText = m.text;
             renderFilesBar(ui);
+            if (m.usage) renderUsageBadge(ui, m.usage);
           }
         });
         chatEl.scrollTop = chatEl.scrollHeight;
@@ -1145,13 +1192,16 @@
       const copyAll = document.createElement('button');
       copyAll.className = 'act-btn';
       copyAll.textContent = '📋 Copy';
-      const stateObj = { status, trace, body, filesBar, actions, rawText: '', steps: [], changedFiles: [] };
+      const tokenBadge = document.createElement('span');
+      tokenBadge.className = 'token-badge';
+      const stateObj = { status, trace, body, filesBar, actions, tokenBadge, rawText: '', steps: [], changedFiles: [] };
       copyAll.onclick = () => {
         navigator.clipboard.writeText(stateObj.rawText || body.innerText);
         copyAll.textContent = '✓ Copied';
         setTimeout(() => copyAll.textContent = '📋 Copy', 1500);
       };
       actions.appendChild(copyAll);
+      actions.appendChild(tokenBadge);
       wrap.appendChild(status);
       wrap.appendChild(trace);
       wrap.appendChild(body);
@@ -1255,6 +1305,7 @@
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
+        let lastUsage = null;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1274,6 +1325,7 @@
               updateBreadcrumb();
             } else if (ev.event === 'step_update') {
               const su = ev.step_update || {};
+              if (su.usage) lastUsage = su.usage;
               if (su.text_delta) {
                 accText += su.text_delta;
                 ui.rawText = accText;
@@ -1304,6 +1356,8 @@
               }
               const dur = r.duration_seconds ? `${Math.round(r.duration_seconds)}s` : '';
               ui.status.textContent = dur ? `Worked for ${dur} ›` : 'Done ›';
+              const turnUsage = r.usage || lastUsage;
+              if (turnUsage) renderUsageBadge(ui, turnUsage);
               if (!ui.changedFiles.length) {
                 fetch(`api/git-diff?cwd=${encodeURIComponent(currentCwd)}`).then(x => x.json()).then(gd => {
                   if (gd.is_git && gd.files && gd.files.length) {
@@ -1333,6 +1387,7 @@
         updateSendBtn();
         loadInfo();
         loadQuota(true);
+        loadTokenStats();
       }
     }
 
@@ -1395,6 +1450,143 @@
     quotaCloseBtn.onclick = () => quotaModal.classList.remove('open');
     quotaModal.onclick = (e) => { if (e.target === quotaModal) quotaModal.classList.remove('open'); };
     quotaRefreshBtn.onclick = () => loadQuota(true);
+
+    const tokenBtn = document.getElementById('tokenBtn');
+    const tokenSummary = document.getElementById('tokenSummary');
+    const tokenModal = document.getElementById('tokenModal');
+    const tokenBody = document.getElementById('tokenBody');
+    const tokenRefreshBtn = document.getElementById('tokenRefreshBtn');
+    const tokenResetBtn = document.getElementById('tokenResetBtn');
+    const tokenCloseBtn = document.getElementById('tokenCloseBtn');
+
+    function fmtNum(n) {
+      return Number(n || 0).toLocaleString();
+    }
+
+    function fmtTok(n) {
+      const v = Number(n || 0);
+      if (v >= 1000000) return `${(v / 1000000).toFixed(2)}M`;
+      return v.toLocaleString();
+    }
+
+    function fmtCompactTokens(n) {
+      const v = Number(n || 0);
+      if (v >= 1000000) return `${(v / 1000000).toFixed(2)}M`;
+      if (v >= 1000) return `${(v / 1000).toFixed(1)}K`;
+      return String(v);
+    }
+
+    function renderUsageBadge(ui, usage) {
+      if (!ui || !ui.tokenBadge || !usage) return;
+      const inp = Number(usage.input_tokens || 0);
+      const out = Number(usage.output_tokens || 0);
+      const cache = Number(usage.cache_read_tokens || 0);
+      const think = Number(usage.thinking_tokens || 0);
+      const tot = Number(usage.total_tokens || 0) || (inp + out);
+      if (!tot && !cache && !think) return;
+      const parts = [`输入 ${fmtTok(inp)}`, `输出 ${fmtTok(out)}`];
+      if (cache > 0) parts.push(`缓存 ${fmtTok(cache)}`);
+      if (think > 0) parts.push(`思考 ${fmtTok(think)}`);
+      ui.tokenBadge.title = `总计 ${fmtNum(tot)} (输入 ${fmtNum(inp)} · 输出 ${fmtNum(out)} · 缓存 ${fmtNum(cache)} · 思考 ${fmtNum(think)})`;
+      ui.tokenBadge.innerHTML = `🪙 <strong>${fmtTok(tot)}</strong> <span>(${parts.join(' · ')})</span>`;
+      ui.tokenBadge.classList.add('show');
+    }
+
+    async function loadTokenStats() {
+      try {
+        const res = await fetch('api/tokens');
+        const data = await res.json();
+        if (!data.ok) {
+          tokenSummary.textContent = 'Tokens';
+          tokenBody.innerHTML = `<div style="color:var(--danger);">获取失败</div>`;
+          return;
+        }
+        const today = data.today || {};
+        const week = data.last_7_days || {};
+        const total = data.total || {};
+        tokenSummary.textContent = `今日 ${fmtCompactTokens(today.total_tokens || 0)}`;
+
+        const subHtml = (b) =>
+          `调用 ${fmtNum(b.calls)} 次<br>输入 ${fmtTok(b.input_tokens)} · 输出 ${fmtTok(b.output_tokens)}` +
+          (b.cache_read_tokens ? ` · 缓存 ${fmtTok(b.cache_read_tokens)}` : '') +
+          (b.thinking_tokens ? ` · 思考 ${fmtTok(b.thinking_tokens)}` : '');
+
+        let html = `
+          <div style="font-size:11.5px;color:var(--muted);">统计起点：${esc(data.started_at_str || '')}（从当前开始累计）</div>
+          <div class="token-grid">
+            <div class="token-card" title="总计 ${fmtNum(today.total_tokens)}">
+              <div class="token-card-label">今日 (${esc(data.today_date || '')})</div>
+              <div class="token-card-val">${fmtCompactTokens(today.total_tokens)}</div>
+              <div class="token-card-sub">${subHtml(today)}</div>
+            </div>
+            <div class="token-card" title="总计 ${fmtNum(week.total_tokens)}">
+              <div class="token-card-label">近 7 天</div>
+              <div class="token-card-val">${fmtCompactTokens(week.total_tokens)}</div>
+              <div class="token-card-sub">${subHtml(week)}</div>
+            </div>
+            <div class="token-card" title="总计 ${fmtNum(total.total_tokens)}">
+              <div class="token-card-label">累计总计</div>
+              <div class="token-card-val">${fmtCompactTokens(total.total_tokens)}</div>
+              <div class="token-card-sub">${subHtml(total)}</div>
+            </div>
+          </div>`;
+
+        const daysList = data.daily_7d || [];
+        const maxDayTok = Math.max(1, ...daysList.map(d => Number(d.total_tokens || 0)));
+        html += `<div class="token-sec-title">每日消耗（近 7 天）</div><div class="q-group" style="gap:4px;">`;
+        daysList.forEach(d => {
+          const pct = Math.round((Number(d.total_tokens || 0) / maxDayTok) * 100);
+          html += `
+            <div class="token-day-row" title="总计 ${fmtNum(d.total_tokens)}">
+              <div class="token-day-top">
+                <span>${esc(d.date)}${d.date === data.today_date ? ' (今日)' : ''}</span>
+                <strong>${fmtTok(d.total_tokens)} (${fmtNum(d.calls)} 次)</strong>
+              </div>
+              <div class="q-bar"><div class="q-fill" style="width:${pct}%;background:#60a5fa;"></div></div>
+              <div class="token-day-sub">输入 ${fmtTok(d.input_tokens)} · 输出 ${fmtTok(d.output_tokens)} · 缓存 ${fmtTok(d.cache_read_tokens)} · 思考 ${fmtTok(d.thinking_tokens)}</div>
+            </div>`;
+        });
+        html += `</div>`;
+
+        const recent = data.recent_calls || [];
+        html += `<div class="token-sec-title">最近调用记录</div>`;
+        if (!recent.length) {
+          html += `<div style="font-size:12px;color:var(--muted);">暂无调用记录，发送消息后将自动统计。</div>`;
+        } else {
+          html += `<div style="display:flex;flex-direction:column;gap:6px;">`;
+          recent.forEach(c => {
+            const srcLabel = c.source === 'web' ? 'Web' : esc(c.source || 'Bot');
+            const modelLabel = c.model ? esc(c.model) : '默认模型';
+            html += `
+              <div class="token-call-row" title="总计 ${fmtNum(c.total_tokens)}">
+                <div class="token-call-left">
+                  <div><strong>[${srcLabel}]</strong> ${modelLabel}</div>
+                  <div class="token-call-meta">${esc(c.time || '')}${c.duration_seconds ? ` · ${c.duration_seconds}s` : ''}</div>
+                </div>
+                <div class="token-call-right">
+                  <div><strong>${fmtTok(c.total_tokens)}</strong></div>
+                  <div class="token-call-meta">入 ${fmtTok(c.input_tokens)} / 出 ${fmtTok(c.output_tokens)}</div>
+                </div>
+              </div>`;
+          });
+          html += `</div>`;
+        }
+
+        tokenBody.innerHTML = html;
+      } catch (e) {
+        tokenBody.innerHTML = `<div style="color:var(--danger);">请求失败: ${esc(String(e))}</div>`;
+      }
+    }
+
+    tokenBtn.onclick = () => { tokenModal.classList.add('open'); loadTokenStats(); };
+    tokenCloseBtn.onclick = () => tokenModal.classList.remove('open');
+    tokenModal.onclick = (e) => { if (e.target === tokenModal) tokenModal.classList.remove('open'); };
+    tokenRefreshBtn.onclick = () => loadTokenStats();
+    tokenResetBtn.onclick = async () => {
+      if (!confirm('确定将统计起点重置为当前时间吗？（重置后今日/近7天/总计将从现在重新开始累计）')) return;
+      const res = await fetch('api/tokens/reset', { method: 'POST' });
+      if (res.ok) loadTokenStats();
+    };
 
     const wechatBtn = document.getElementById('wechatBtn');
     const wechatSummary = document.getElementById('wechatSummary');
@@ -1577,6 +1769,7 @@
     sendBtn.onclick = send;
     loadInfo();
     loadQuota(false);
+    loadTokenStats();
     loadWechatStatus();
     loadQqStatus();
   </script>

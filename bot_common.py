@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Awaitable, Callable, List
 
+from token_stats import get_token_stats, record_token_usage
+
 
 class BotBridgeHelper:
     """Shared slash-command handler and agy runner for WeChat and QQ bots."""
@@ -42,6 +44,7 @@ class BotBridgeHelper:
                 "/models - 查看可用模型（带序号）\n"
                 "/model <序号或ID> - 切换模型（不带参数恢复默认）\n"
                 "/quota 或 /额度 - 查看当前模型额度\n"
+                "/tokens - 查看 Token 消耗统计（今日/近7天/总计）\n"
                 "/status - 查看当前状态\n"
                 "直接发送文字即可与 agy 对话。"
             )
@@ -109,6 +112,27 @@ class BotBridgeHelper:
                     rst_str = "满额/未消耗" if (not rst or rst.startswith("1970-")) else rst[:19].replace("T", " ")
                     lines.append(f"  - {win}：{pct}%（重置：{rst_str}）")
             return "\n".join(lines)
+        if cmd in ("/tokens", "/token"):
+            st = get_token_stats()
+            t = st["today"]
+            w = st["last_7_days"]
+            tot = st["total"]
+            def _tok(n: int) -> str:
+                return f"{n / 1_000_000:.2f}M" if n >= 1_000_000 else f"{n:,}"
+            def _fmt(b: dict) -> str:
+                return (
+                    f"{_tok(b['total_tokens'])} "
+                    f"(输入 {_tok(b['input_tokens'])} / 输出 {_tok(b['output_tokens'])} / 缓存 {_tok(b['cache_read_tokens'])})"
+                )
+            return (
+                f"🪙 Token 消耗统计（起点：{st['started_at_str']}）\n\n"
+                f"【今日 ({st['today_date']})】\n"
+                f"  总计：{_fmt(t)}（{t['calls']} 次调用）\n"
+                f"【近 7 天】\n"
+                f"  总计：{_fmt(w)}（{w['calls']} 次调用）\n"
+                f"【累计总计】\n"
+                f"  总计：{_fmt(tot)}（{tot['calls']} 次调用）"
+            )
         if cmd == "/status":
             return (
                 f"当前项目：{sess.get('cwd')}\n"
@@ -144,6 +168,8 @@ class BotBridgeHelper:
         out_bytes, err_bytes = await proc.communicate()
         acc_text: List[str] = []
         final_resp = ""
+        last_usage = None
+        recorded_usage = False
         for line in out_bytes.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
@@ -158,12 +184,34 @@ class BotBridgeHelper:
                 su = ev.get("step_update") or {}
                 if su.get("text_delta"):
                     acc_text.append(su["text_delta"])
+                if isinstance(su.get("usage"), dict):
+                    last_usage = su["usage"]
             elif ev.get("event") == "result":
                 r = ev.get("result") or {}
                 if r.get("conversation_id"):
                     sess["conversation_id"] = r["conversation_id"]
                 if r.get("response"):
                     final_resp = r["response"]
+                usage = r.get("usage") or last_usage
+                if usage and not recorded_usage:
+                    record_token_usage(
+                        usage=usage,
+                        source=self.channel_name,
+                        conversation_id=sess.get("conversation_id") or "",
+                        model=sess.get("model") or "",
+                        cwd=str(cwd),
+                        duration_seconds=float(r.get("duration_seconds") or 0.0),
+                    )
+                    recorded_usage = True
+
+        if last_usage and not recorded_usage:
+            record_token_usage(
+                usage=last_usage,
+                source=self.channel_name,
+                conversation_id=sess.get("conversation_id") or "",
+                model=sess.get("model") or "",
+                cwd=str(cwd),
+            )
 
         text = final_resp or "".join(acc_text)
         if not text and proc.returncode != 0:

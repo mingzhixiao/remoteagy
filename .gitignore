@@ -5,6 +5,8 @@
 .qq_state.tmp
 .sessions.json
 .projects.json
+.token_usage.jsonl
+.token_stats_meta.json
 .remoteagy_uploads/
 __pycache__/
 *.pyc

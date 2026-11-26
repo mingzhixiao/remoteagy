@@ -1,0 +1,9 @@
+.env
+.wechat_state.json
+.wechat_state.tmp
+.sessions.json
+.projects.json
+.remoteagy_uploads/
+__pycache__/
+*.pyc
+*.log
